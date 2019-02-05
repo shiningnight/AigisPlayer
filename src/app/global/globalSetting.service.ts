@@ -5,12 +5,23 @@ import * as crypto from 'crypto'
 import { GlobalStatusService } from './globalStatus.service'
 import { ElMessageService } from 'element-angular';
 import { TranslateService } from '@ngx-translate/core';
+import { GameModel } from '../core/game.model';
+import { Size } from '../core/util';
+
+export const ProxyRule = {
+    off: 'direct://',
+    shimakazego: '127.0.0.1:8099',
+    acgp: '127.0.0.1:8123',
+    shadowsocks: 'socks5://127.0.0.1:1080',
+    custom: '',
+}
 
 export class Proxy {
-    Host: String = '';
-    Port: String = '';
-    Socks5: Boolean = false;
-    Enabled: Boolean = false;
+    Type = 'off';
+    Host = '';
+    Port = '';
+    Socks5 = false;
+    Enabled = false;
 }
 export class Account {
     Name = '新账户';
@@ -29,11 +40,17 @@ export class GlobalSetting {
     public SpeedUpKey = '';
     public UseSkillKey = '';
     public ScreenShotKey = '';
+    public ReloadKey = '';
     public Language = 'cn';
     public Zoom = 100;
+    public Opacity = 100;
+    public Mute = false;
+    public Lock = false;
+    public DefaultGame = new GameModel('None', new Size(640, 960), 'about:blank');
+    public DataCollectPermit = true;
 }
 
-const needDispatch = ['Zoom'];
+const needDispatch = ['Zoom', 'Mute', 'Lock', 'Opacity'];
 
 @Injectable()
 export class GlobalSettingService {
@@ -48,11 +65,13 @@ export class GlobalSettingService {
             try {
                 // 读取全局设置信息
                 this.GlobalSetting = Object.assign(this.GlobalSetting, JSON.parse(window.localStorage.getItem('globalSetting')));
+
                 // 装载一些数据给Service
                 for (let i = 0; i < needDispatch.length; i++) {
                     const key = needDispatch[i];
                     this.globalStatusService.GlobalStatusStore.Get(key).Dispatch(this.GlobalSetting[key]);
                 }
+                this.globalStatusService.GlobalStatusStore.Get('CurrentGame').Dispatch(this.GlobalSetting.DefaultGame);
             } catch { }
         }
         if (window.localStorage.getItem('accountList')) {
@@ -61,6 +80,11 @@ export class GlobalSettingService {
                 this.AccountList = Object.assign(this.AccountList, JSON.parse(window.localStorage.getItem('accountList')));
                 // TODO:这里记得要加上默认账户的选择
                 if (!this.AccountList.Encrypted) {
+                    this.globalStatusService.GlobalStatusStore.Get('AccountList').Dispatch(
+                        this.AccountList.List.map((v) => {
+                            return v.Username;
+                        })
+                    )
                     const defaultAccount = this.AccountList.List.find(v => v.IsDefault);
                     if (defaultAccount) {
                         this.globalStatusService.GlobalStatusStore.Get('SelectedAccount').Dispatch(defaultAccount.Username);
@@ -81,8 +105,13 @@ export class GlobalSettingService {
             }
         })
 
-        // 订阅缩放
-        this.globalStatusService.GlobalStatusStore.Get('Zoom').Subscribe(v => { this.GlobalSetting.Zoom = v; })
+        // 订阅
+        for (let i = 0; i < needDispatch.length; i++) {
+            const key = needDispatch[i];
+            this.globalStatusService.GlobalStatusStore.Get(key).Subscribe(v => {
+                this.GlobalSetting[key] = v;
+            })
+        }
 
         // 给globalSetting的所有成员加上getter和setter，方便调取saveConfigure
         AddSetterToObject(this.GlobalSetting, (v) => {
@@ -132,9 +161,20 @@ export class GlobalSettingService {
 
     }
     setProxy(proxy: Proxy) {
+        if (proxy.Type === undefined) {
+            proxy.Type = proxy.Enabled ? 'custom' : 'off';
+        }
         this.GlobalSetting.Proxy = proxy;
-        const proxyAddress = proxy.Enabled ? ((proxy.Socks5 ? 'socks5://' : '') + `${proxy.Host}:${proxy.Port}`) : 'direct://'
-        this.electronService.SetProxy(proxyAddress);
+        // 读取规则
+        let proxyRule = ProxyRule[proxy.Type];
+        if (proxyRule === '') {
+            proxyRule =
+                (proxy.Socks5 ? 'socks5://' : '') + `${proxy.Host}:${proxy.Port}`;
+        }
+        if (proxyRule === undefined) {
+            proxyRule = 'direct://';
+        }
+        this.electronService.SetProxy(proxyRule);
         this.electronService.ipcRenderer.send('proxyStatusUpdate', proxy)
     }
     FindAccount(username) {
@@ -155,6 +195,11 @@ export class GlobalSettingService {
                 decipher.on('end', () => {
                     try {
                         this.AccountList.List = JSON.parse(decrypted);
+                        this.globalStatusService.GlobalStatusStore.Get('AccountList').Dispatch(
+                            this.AccountList.List.map((v) => {
+                                return v.Username;
+                            })
+                        );
                         this.AccountList.Encrypted = false;
                         // 密码正确
                         this.globalStatusService.GlobalStatusStore.Get('AccountListPasswordError').Dispatch(false);

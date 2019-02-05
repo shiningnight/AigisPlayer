@@ -4,17 +4,17 @@ import { GameService } from '../../../core/game.service';
 import { GlobalSettingService, Account } from '../../../global/globalSetting.service'
 import { GlobalStatusService } from '../../../global/globalStatus.service'
 import { ElMessageService } from 'element-angular'
-import * as Rx from 'rxjs/Rx'
+import * as Rx from 'rxjs'
 import { WebviewTag, WebContents } from 'electron';
 import { ElectronService } from '../../../core/electron.service'
-import { DecipherService } from '../../../decipher/decipher.service'
 import { PluginService } from '../../../core/plugin.service'
+import { GameModel } from '../../../core/game.model';
+import { DebuggerService } from '../../../gameData/debugger.service';
 
 @Component({
     selector: 'app-game',
     templateUrl: './game.component.html',
     styleUrls: ['./game.component.scss'],
-    providers: [DecipherService]
 })
 export class GameComponent implements AfterViewInit, OnDestroy {
     private gameView: WebviewTag = null;
@@ -27,7 +27,7 @@ export class GameComponent implements AfterViewInit, OnDestroy {
         private message: ElMessageService,
         private translateService: TranslateService,
         private electronService: ElectronService,
-        private decipherService: DecipherService,
+        private debuggerService: DebuggerService,
         private pluginService: PluginService
     ) {
         this.subscriptionList.push(
@@ -45,13 +45,26 @@ export class GameComponent implements AfterViewInit, OnDestroy {
         this.gameService.WebView = this.gameView;
         let webContent: WebContents = null;
         const webview = this.gameView;
+
         webview.addEventListener('dom-ready', () => {
+            // this.debuggerService.Detach(webview.getWebContents());
             webContent = webview.getWebContents();
+            const mute = this.globalStatusService.GlobalStatusStore.Get('Mute').Value;
+            webview.setAudioMuted(mute);
+            const CurrentGame = <GameModel>this.globalStatusService.GlobalStatusStore.Get('CurrentGame').Value;
+            // 第一次打开时启动默认游戏
+            if (!this.gameView.canGoBack()) {
+                this.gameService.LoadGame(CurrentGame);
+            }
             this.gameView.setZoomFactor(this.zoom / 100);
-            webview.openDevTools();
+
+            if (this.electronService.serve) {
+                // 打开开发者工具
+                // webview.openDevTools();
+            }
             // 碧蓝删去滑动条
-            if (this.gameService.CurrentGame.Spec === 'granblue') {
-                webview.send('catch', this.gameService.CurrentGame.Spec);
+            if (CurrentGame.Spec === 'granblue') {
+                webview.send('catch', CurrentGame.Spec);
                 webview.insertCSS('::-webkit-scrollbar{display:none!important}');
             }
 
@@ -60,13 +73,16 @@ export class GameComponent implements AfterViewInit, OnDestroy {
                 webview.getURL().indexOf('/play/') !== -1 ||
                 webview.getURL().indexOf('game_dmm.php') !== -1) {
 
-                webview.send('catch', this.gameService.CurrentGame.Spec);
-                this.pluginService.ClearResponseList();
-                this.decipherService.Attach(webview.getWebContents()); // 注入debuger
+                webview.send('catch', CurrentGame.Spec);
+                this.debuggerService.Attach(webview.getWebContents()); // 注入debuger
             }
 
             // 自动输入用户名密码
-            if (webview.getURL().indexOf('login') !== -1 && webview.getURL().indexOf('logout') === -1) {
+            if (
+                webview.getURL().indexOf('dmm') !== -1 &&
+                webview.getURL().indexOf('login') !== -1 &&
+                webview.getURL().indexOf('logout') === -1
+            ) {
                 // 从globalSetting中获取账号密码
                 const username = this.globalStatusService.GlobalStatusStore.Get('SelectedAccount').Value;
                 const account = this.globalSettingService.FindAccount(username);
